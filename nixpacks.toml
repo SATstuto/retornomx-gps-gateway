@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["chromium", "nss", "freetype", "harfbuzz", "ca-certificates", "ttf-opensans"]
+nixPkgs = ["chromium", "nss", "freetype", "harfbuzz", "cacert", "fontconfig"]
 
 [variables]
 PUPPETEER_EXECUTABLE_PATH = "/run/current-system/sw/bin/chromium"
