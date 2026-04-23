@@ -1,0 +1,19 @@
+{
+  "name": "retornomx-gps-gateway",
+  "version": "1.0.0",
+  "description": "GPS proxy gateway for RetornoMX - supports Wialon, Logransat, TrackSolid",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^21.0.0",
+    "node-fetch": "^2.7.0",
+    "crypto": "^1.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
