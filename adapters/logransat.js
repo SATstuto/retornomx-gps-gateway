@@ -107,7 +107,7 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
     // 4. Esperar a que cargue el dashboard y objects.php sea llamado
     await page.waitForResponse(
       (response) => response.url().includes('objects.php'),
-      { timeout: 20000 }
+      { timeout: 45000 }
     )
 
     // Dar tiempo para que todos los objects.php se resuelvan
