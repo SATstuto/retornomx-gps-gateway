@@ -43,7 +43,7 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
     const base = portalUrl.endsWith('/') ? portalUrl.slice(0, -1) : portalUrl
 
     // 1. Cargar página de login
-    await page.goto(base, { waitUntil: 'networkidle2', timeout: 30000 })
+    await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
     // 2. Llenar credenciales - selectores comunes en portales PHP con jQuery
     // Intentamos múltiples selectores para máxima compatibilidad
