@@ -7,17 +7,18 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
   })
 
   const page = await browser.newPage()
-  let lngData = null
+  const allJson = []
 
   await page.setRequestInterception(true)
   page.on('request', (req) => req.continue())
   page.on('response', async (response) => {
     const url = response.url()
-    if (url.includes('lng.php')) {
+    const ct = response.headers()['content-type'] || ''
+    if (ct.includes('json') && !url.includes('lng.php')) {
       try {
         const json = await response.json()
-        console.log('[GPS] lng.php data:', JSON.stringify(json).substring(0, 500))
-        lngData = json
+        console.log('[GPS] JSON:', url, '| size:', JSON.stringify(json).length)
+        allJson.push({ url, data: json })
       } catch (e) {}
     }
   })
@@ -25,52 +26,57 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
   try {
     const base = portalUrl.endsWith('/') ? portalUrl.slice(0, -1) : portalUrl
     await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    
+    console.log('[GPS] En login page:', page.url())
 
-    const userSelectors = ['#username', 'input[name="usuario"]', 'input[name="user"]', 'input[type="text"]']
-    const passSelectors = ['#password', 'input[name="contrasena"]', 'input[name="password"]', 'input[type="password"]']
+    // Esperar que aparezca el campo de usuario
+    await page.waitForSelector('#username, input[type="text"]', { timeout: 10000 })
+    
+    await page.click('#username', { clickCount: 3 })
+    await page.type('#username', usuario)
+    await page.click('#password', { clickCount: 3 })
+    await page.type('#password', password)
+    
+    console.log('[GPS] Credenciales llenadas, haciendo submit')
+    
+    // Click en submit y esperar navegacion o cambio de URL
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {}),
+      page.click('button[type="submit"], input[type="submit"]').catch(async () => {
+        await page.keyboard.press('Enter')
+      })
+    ])
+    
+    console.log('[GPS] Despues de submit:', page.url())
+    
+    // Esperar 20s para que cargue el dashboard
+    await new Promise(r => setTimeout(r, 20000))
+    
+    console.log('[GPS] URL final:', page.url())
+    console.log('[GPS] JSON capturados:', allJson.map(j => j.url).join(', '))
 
-    for (const sel of userSelectors) {
-      const el = await page.$(sel)
-      if (el) { await page.click(sel, { clickCount: 3 }); await page.type(sel, usuario); break }
+    if (allJson.length === 0) throw new Error('Sin respuestas JSON despues del login')
+
+    // Buscar el que tenga coordenadas
+    for (const response of allJson) {
+      const str = JSON.stringify(response.data)
+      if (str.includes('"lat"') || str.includes('"lng"') || str.includes('"x"')) {
+        console.log('[GPS] Encontrado con coords:', response.url)
+        const data = response.data
+        const units = data.data ? Object.values(data.data) : Array.isArray(data) ? data : Object.values(data)
+        const unit = units[0] as any
+        const loc = unit.location?.[0] || unit.pos || unit
+        return {
+          lat: parseFloat(loc.lat || loc.x),
+          lng: parseFloat(loc.lng || loc.y),
+          speed: loc.speed || 0,
+          status: unit.status_string || 'activo',
+          provider: 'logransat',
+        }
+      }
     }
-    for (const sel of passSelectors) {
-      const el = await page.$(sel)
-      if (el) { await page.click(sel, { clickCount: 3 }); await page.type(sel, password); break }
-    }
 
-    for (const sel of ['button[type="submit"]', 'input[type="submit"]', '.btn-login', '#btn-login']) {
-      const el = await page.$(sel)
-      if (el) { await el.click(); break }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 35000))
-
-    if (!lngData) throw new Error('lng.php no respondio')
-
-    console.log('[GPS] Estructura completa:', JSON.stringify(lngData).substring(0, 1000))
-
-    const data = lngData.data
-    if (!data) throw new Error('Sin campo data en lng.php: ' + JSON.stringify(lngData))
-
-    const units = typeof data === 'object' ? Object.values(data) : data
-    if (!units || units.length === 0) throw new Error('Sin unidades: ' + JSON.stringify(data).substring(0, 300))
-
-    const unit = units[0]
-    console.log('[GPS] Unidad:', JSON.stringify(unit).substring(0, 500))
-
-    const loc = unit.location?.[0] || unit.pos || unit.position || unit
-    const lat = parseFloat(loc.lat || loc.x || loc.latitude || loc.lt)
-    const lng = parseFloat(loc.lng || loc.y || loc.longitude || loc.ln)
-
-    if (!lat || !lng) throw new Error('Sin coordenadas en: ' + JSON.stringify(unit).substring(0, 300))
-
-    return {
-      lat,
-      lng,
-      speed: loc.speed || loc.sp || 0,
-      status: unit.status_string || unit.status || 'activo',
-      provider: 'logransat',
-    }
+    throw new Error('Sin coordenadas. URLs: ' + allJson.map(j => j.url).join(', '))
   } finally {
     await browser.close()
   }
