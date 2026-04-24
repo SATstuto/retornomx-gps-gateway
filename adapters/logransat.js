@@ -64,7 +64,7 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
         console.log('[GPS] Encontrado con coords:', response.url)
         const data = response.data
         const units = data.data ? Object.values(data.data) : Array.isArray(data) ? data : Object.values(data)
-        const unit = units[0] as any
+        const unit = units[0]
         const loc = unit.location?.[0] || unit.pos || unit
         return {
           lat: parseFloat(loc.lat || loc.x),
