@@ -1,154 +1,78 @@
-// adapters/logransat.js
-// Puppeteer adapter para Logransat y portales similares (PHP + jQuery, objects.php)
-// Funciona para cualquier portal que use el mismo patrón de objects.php
-
 const puppeteer = require('puppeteer')
 
 async function getLocation({ portalUrl, usuario, password, deviceId }) {
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-    ],
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
   })
 
   const page = await browser.newPage()
-
-  // Interceptar la respuesta de objects.php
-  let objectsData = null
+  let locationData = null
 
   await page.setRequestInterception(true)
-
   page.on('request', (req) => req.continue())
-
   page.on('response', async (response) => {
     const url = response.url()
-    if (url.includes('objects.php')) {
+    const contentType = response.headers()['content-type'] || ''
+    if (contentType.includes('json') && !url.includes('login')) {
       try {
         const json = await response.json()
-        if (json && json.success) {
-          objectsData = json
+        if (json && typeof json === 'object' && !locationData) {
+          console.log('[GPS] JSON interceptado:', url)
+          locationData = { url, data: json }
         }
-      } catch (e) {
-        // no era JSON, ignorar
-      }
+      } catch (e) {}
     }
   })
 
   try {
-    // Normalizar URL base
     const base = portalUrl.endsWith('/') ? portalUrl.slice(0, -1) : portalUrl
-
-    // 1. Cargar página de login
     await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-    // 2. Llenar credenciales - selectores comunes en portales PHP con jQuery
-    // Intentamos múltiples selectores para máxima compatibilidad
-    const userSelectors = [
-      'input[name="usuario"]',
-      'input[name="user"]',
-      'input[name="username"]',
-      'input[type="text"]',
-      '#usuario',
-      '#username',
-    ]
+    // Login
+    const userSelectors = ['#username', 'input[name="usuario"]', 'input[name="user"]', 'input[type="text"]']
+    const passSelectors = ['#password', 'input[name="contrasena"]', 'input[name="password"]', 'input[type="password"]']
 
-    const passSelectors = [
-      'input[name="contrasena"]',
-      'input[name="password"]',
-      'input[name="pass"]',
-      'input[type="password"]',
-      '#contrasena',
-      '#password',
-    ]
-
-    let userFilled = false
     for (const sel of userSelectors) {
       const el = await page.$(sel)
-      if (el) {
-        await page.click(sel, { clickCount: 3 })
-        await page.type(sel, usuario)
-        userFilled = true
-        break
-      }
+      if (el) { await page.click(sel, { clickCount: 3 }); await page.type(sel, usuario); break }
     }
-
-    if (!userFilled) throw new Error('No se encontró campo de usuario en el portal')
-
     for (const sel of passSelectors) {
       const el = await page.$(sel)
-      if (el) {
-        await page.click(sel, { clickCount: 3 })
-        await page.type(sel, password)
-        break
-      }
+      if (el) { await page.click(sel, { clickCount: 3 }); await page.type(sel, password); break }
     }
 
-    // 3. Submit login
-    const submitSelectors = [
-      'button[type="submit"]',
-      'input[type="submit"]',
-      'button:contains("Iniciar")',
-      '.btn-login',
-      '#btn-login',
-    ]
-
-    for (const sel of submitSelectors) {
+    // Submit
+    for (const sel of ['button[type="submit"]', 'input[type="submit"]', '.btn-login', '#btn-login']) {
       const el = await page.$(sel)
-      if (el) {
-        await el.click()
-        break
-      }
+      if (el) { await el.click(); break }
     }
 
-    // 4. Esperar a que cargue el dashboard y objects.php sea llamado
-    await page.waitForResponse(
-      (response) => response.url().includes('objects.php'),
-      { timeout: 45000 }
-    )
+    // Esperar cualquier JSON por 30 segundos
+    await new Promise((resolve) => setTimeout(resolve, 30000))
 
-    // Dar tiempo para que todos los objects.php se resuelvan
-    await new Promise((r) => setTimeout(r, 3000))
+    console.log('[GPS] locationData capturado:', JSON.stringify(locationData?.url))
 
-    if (!objectsData) {
-      throw new Error('Login exitoso pero no se recibió datos de objects.php')
-    }
+    if (!locationData) throw new Error('No se capturaron datos GPS despues del login')
 
-    // 5. Extraer posición de la unidad
-    const units = Object.values(objectsData.data)
+    // Intentar extraer lat/lng de cualquier estructura
+    const data = locationData.data
+    const units = data.data ? Object.values(data.data) : 
+                  data.units ? Object.values(data.units) :
+                  Array.isArray(data) ? data : []
 
-    if (units.length === 0) {
-      throw new Error('No hay unidades en esta cuenta espejo')
-    }
+    if (units.length === 0) throw new Error('No se encontraron unidades en respuesta: ' + JSON.stringify(data).substring(0, 200))
 
-    // Si hay deviceId, buscar por él; si no, tomar la primera unidad
-    let unit = units[0]
-    if (deviceId) {
-      const found = units.find((u) => {
-        const key = Object.keys(objectsData.data).find(
-          (k) => objectsData.data[k] === u
-        )
-        return key === deviceId
-      })
-      if (found) unit = found
-    }
+    const unit = units[0] as any
+    const loc = unit.location?.[0] || unit.pos || unit.position || unit
 
-    const location = unit.location && unit.location[0]
-    if (!location) {
-      throw new Error('La unidad no tiene posición registrada aún')
-    }
+    if (!loc?.lat && !loc?.x) throw new Error('No se encontro posicion en unidad: ' + JSON.stringify(unit).substring(0, 200))
 
     return {
-      lat: parseFloat(location.lat),
-      lng: parseFloat(location.lng),
-      speed: location.speed || 0,
-      angle: location.angle || 0,
-      altitude: location.altitude || 0,
-      dt_tracker: location.dt_tracker,
-      status: unit.status_string || unit.status,
+      lat: parseFloat(loc.lat || loc.x || loc.latitude),
+      lng: parseFloat(loc.lng || loc.y || loc.longitude),
+      speed: loc.speed || 0,
+      status: unit.status_string || unit.status || 'activo',
       provider: 'logransat',
     }
   } finally {
