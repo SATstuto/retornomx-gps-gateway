@@ -7,20 +7,18 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
   })
 
   const page = await browser.newPage()
-  let locationData = null
+  const allResponses = []
 
   await page.setRequestInterception(true)
   page.on('request', (req) => req.continue())
   page.on('response', async (response) => {
     const url = response.url()
     const contentType = response.headers()['content-type'] || ''
-    if (contentType.includes('json') && !url.includes('login')) {
+    if (contentType.includes('json')) {
       try {
         const json = await response.json()
-        if (json && typeof json === 'object' && !locationData) {
-          console.log('[GPS] JSON interceptado:', url)
-          locationData = { url, data: json }
-        }
+        console.log('[GPS] JSON URL:', url, '| keys:', Object.keys(json).join(','))
+        allResponses.push({ url, data: json })
       } catch (e) {}
     }
   })
@@ -29,7 +27,6 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
     const base = portalUrl.endsWith('/') ? portalUrl.slice(0, -1) : portalUrl
     await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 30000 })
 
-    // Login
     const userSelectors = ['#username', 'input[name="usuario"]', 'input[name="user"]', 'input[type="text"]']
     const passSelectors = ['#password', 'input[name="contrasena"]', 'input[name="password"]', 'input[type="password"]']
 
@@ -42,31 +39,39 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
       if (el) { await page.click(sel, { clickCount: 3 }); await page.type(sel, password); break }
     }
 
-    // Submit
     for (const sel of ['button[type="submit"]', 'input[type="submit"]', '.btn-login', '#btn-login']) {
       const el = await page.$(sel)
       if (el) { await el.click(); break }
     }
 
-    // Esperar cualquier JSON por 30 segundos
-    await new Promise((resolve) => setTimeout(resolve, 30000))
+    // Esperar 35 segundos para capturar todos los endpoints
+    await new Promise((resolve) => setTimeout(resolve, 35000))
 
-    console.log('[GPS] locationData capturado:', JSON.stringify(locationData?.url))
+    console.log('[GPS] Total responses:', allResponses.length)
+    allResponses.forEach(r => console.log('[GPS] ->', r.url))
 
-    if (!locationData) throw new Error('No se capturaron datos GPS despues del login')
+    // Buscar el endpoint con datos de ubicacion
+    const locationResponse = allResponses.find(r => {
+      const d = r.data
+      const hasData = d.data || d.units || d.objects || d.devices
+      return hasData && !r.url.includes('lng.php')
+    })
 
-    // Intentar extraer lat/lng de cualquier estructura
-    const data = locationData.data
-    const units = data.data ? Object.values(data.data) : 
+    if (!locationResponse) {
+      throw new Error('No se encontro endpoint GPS. URLs: ' + allResponses.map(r => r.url).join(', '))
+    }
+
+    const data = locationResponse.data
+    const units = data.data ? Object.values(data.data) :
                   data.units ? Object.values(data.units) :
+                  data.objects ? Object.values(data.objects) :
+                  data.devices ? Object.values(data.devices) :
                   Array.isArray(data) ? data : []
 
-    if (units.length === 0) throw new Error('No se encontraron unidades en respuesta: ' + JSON.stringify(data).substring(0, 200))
+    if (units.length === 0) throw new Error('Sin unidades en: ' + JSON.stringify(data).substring(0, 300))
 
     const unit = units[0]
     const loc = unit.location?.[0] || unit.pos || unit.position || unit
-
-    if (!loc?.lat && !loc?.x) throw new Error('No se encontro posicion en unidad: ' + JSON.stringify(unit).substring(0, 200))
 
     return {
       lat: parseFloat(loc.lat || loc.x || loc.latitude),
