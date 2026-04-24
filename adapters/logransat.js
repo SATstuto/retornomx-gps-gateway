@@ -7,18 +7,17 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
   })
 
   const page = await browser.newPage()
-  const allResponses = []
+  let lngData = null
 
   await page.setRequestInterception(true)
   page.on('request', (req) => req.continue())
   page.on('response', async (response) => {
     const url = response.url()
-    const contentType = response.headers()['content-type'] || ''
-    if (contentType.includes('json')) {
+    if (url.includes('lng.php')) {
       try {
         const json = await response.json()
-        console.log('[GPS] JSON URL:', url, '| keys:', Object.keys(json).join(','))
-        allResponses.push({ url, data: json })
+        console.log('[GPS] lng.php data:', JSON.stringify(json).substring(0, 500))
+        lngData = json
       } catch (e) {}
     }
   })
@@ -44,39 +43,31 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
       if (el) { await el.click(); break }
     }
 
-    // Esperar 35 segundos para capturar todos los endpoints
     await new Promise((resolve) => setTimeout(resolve, 35000))
 
-    console.log('[GPS] Total responses:', allResponses.length)
-    allResponses.forEach(r => console.log('[GPS] ->', r.url))
+    if (!lngData) throw new Error('lng.php no respondio')
 
-    // Buscar el endpoint con datos de ubicacion
-    const locationResponse = allResponses.find(r => {
-      const d = r.data
-      const hasData = d.data || d.units || d.objects || d.devices
-      return hasData && !r.url.includes('lng.php')
-    })
+    console.log('[GPS] Estructura completa:', JSON.stringify(lngData).substring(0, 1000))
 
-    if (!locationResponse) {
-      throw new Error('No se encontro endpoint GPS. URLs: ' + allResponses.map(r => r.url).join(', '))
-    }
+    const data = lngData.data
+    if (!data) throw new Error('Sin campo data en lng.php: ' + JSON.stringify(lngData))
 
-    const data = locationResponse.data
-    const units = data.data ? Object.values(data.data) :
-                  data.units ? Object.values(data.units) :
-                  data.objects ? Object.values(data.objects) :
-                  data.devices ? Object.values(data.devices) :
-                  Array.isArray(data) ? data : []
-
-    if (units.length === 0) throw new Error('Sin unidades en: ' + JSON.stringify(data).substring(0, 300))
+    const units = typeof data === 'object' ? Object.values(data) : data
+    if (!units || units.length === 0) throw new Error('Sin unidades: ' + JSON.stringify(data).substring(0, 300))
 
     const unit = units[0]
+    console.log('[GPS] Unidad:', JSON.stringify(unit).substring(0, 500))
+
     const loc = unit.location?.[0] || unit.pos || unit.position || unit
+    const lat = parseFloat(loc.lat || loc.x || loc.latitude || loc.lt)
+    const lng = parseFloat(loc.lng || loc.y || loc.longitude || loc.ln)
+
+    if (!lat || !lng) throw new Error('Sin coordenadas en: ' + JSON.stringify(unit).substring(0, 300))
 
     return {
-      lat: parseFloat(loc.lat || loc.x || loc.latitude),
-      lng: parseFloat(loc.lng || loc.y || loc.longitude),
-      speed: loc.speed || 0,
+      lat,
+      lng,
+      speed: loc.speed || loc.sp || 0,
       status: unit.status_string || unit.status || 'activo',
       provider: 'logransat',
     }
