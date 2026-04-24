@@ -63,7 +63,7 @@ async function getLocation({ portalUrl, usuario, password, deviceId }) {
 
     if (units.length === 0) throw new Error('No se encontraron unidades en respuesta: ' + JSON.stringify(data).substring(0, 200))
 
-    const unit = units[0] as any
+    const unit = units[0]
     const loc = unit.location?.[0] || unit.pos || unit.position || unit
 
     if (!loc?.lat && !loc?.x) throw new Error('No se encontro posicion en unidad: ' + JSON.stringify(unit).substring(0, 200))
